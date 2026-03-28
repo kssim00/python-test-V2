@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
-    <title>코드:앤 파이썬 스튜디오 (v9.8 - Final Edition)</title>
+    <title>코드:앤 파이썬 스튜디오 (v9.9 - Pro Edition)</title>
     <!-- 라이브러리 로드 -->
     <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.36.1/min/vs/loader.min.js"></script>
@@ -28,7 +28,7 @@
         .modal-box { background: #252526; padding: 30px; border-radius: 12px; border: 1px solid #444; width: 320px; text-align: center; box-shadow: 0 10px 50px rgba(0,0,0,1); }
 
         .activity-bar { width: 50px; background: #333; display: flex; flex-direction: column; align-items: center; padding: 20px 0; justify-content: space-between; flex-shrink: 0; }
-        .explorer { width: 250px; background: var(--vscode-side); border-right: 1px solid #333; display: flex; flex-direction: column; flex-shrink: 0; }
+        .explorer { width: 250px; min-width: 100px; background: var(--vscode-side); border-right: 1px solid #333; display: flex; flex-direction: column; flex-shrink: 0; }
         .main-content { flex: 1; display: flex; overflow: hidden; position: relative; }
         
         .description-panel { width: 400px; min-width: 150px; padding: 25px; border-right: 1px solid #333; background: #1e1e1e; overflow-y: auto; flex-shrink: 0; box-sizing: border-box; }
@@ -41,6 +41,7 @@
         .bg-yellow { background-color: #f1c40f !important; color: black !important; font-weight: bold; }
         .bg-blue { background-color: #3498db !important; color: white !important; }
 
+        /* 리사이저 스타일 */
         .resizer-h { width: 8px; cursor: col-resize; background: transparent; z-index: 50; margin: 0 -4px; }
         .resizer-h:hover { background: rgba(0, 122, 204, 0.4); }
         .resizer-v { height: 10px; cursor: row-resize; background: transparent; z-index: 60; margin: -5px 0; position: relative; }
@@ -71,12 +72,15 @@
         .btn-mini { padding: 4px 6px; border-radius: 3px; border: none; cursor: pointer; font-size: 10px; color: white; margin: 0 2px; }
         .tab-btn { background: none; border: none; color: #666; cursor: pointer; font-weight: bold; font-size: 13px; padding-bottom: 8px; margin-right: 10px; }
         .tab-btn.active { color: var(--vscode-accent); border-bottom: 2px solid var(--vscode-accent); }
+
+        /* 리포트 전용 스타일 */
+        #report-view { display:none; position:fixed; top:50%; left:50%; transform:translate(-50%, -50%); width:400px; height:500px; background:#252526; border:1px solid #444; border-radius:12px; z-index:11000; padding:20px; flex-direction:column; }
     </style>
 </head>
 <body onselectstart="return !isDragging">
 
 <script>localStorage.removeItem('coden_user_v81');</script>
-<div id="loader" class="overlay"><div class="spinner"></div><b id="loader-msg">데이터 및 엔진 동기화 중...</b></div>
+<div id="loader" class="overlay"><div class="spinner"></div><b id="loader-msg">데이터 연동 및 엔진 로드 중...</b></div>
 
 <!-- 관리자 인증 모달 -->
 <div id="pw-modal" class="custom-modal" onclick="if(event.target == this) closePanels()">
@@ -104,7 +108,7 @@
             <div onclick="location.reload()" title="로그아웃 및 초기화"><i class="fas fa-sign-out-alt" style="color:#555; cursor:pointer;"></i></div>
         </div>
     </div>
-    <div class="explorer">
+    <div class="explorer" id="panel-explorer">
         <div style="padding: 15px 20px; display: flex; justify-content: space-between; align-items: center;">
             <div style="font-size: 11px; color: #888; font-weight: bold;">EXPLORER</div>
             <i id="explorer-refresh-icon" class="fas fa-sync-alt" style="font-size: 10px; color: #555; cursor: pointer;" onclick="refreshData()" title="문제 새로고침"></i>
@@ -112,6 +116,7 @@
         <div id="accordion-root" style="flex: 1; overflow-y: auto;"></div>
         <div id="progress-stats" style="padding: 15px 20px; font-size: 12px; color: #28a745; border-top: 1px solid #333; font-weight:bold;">성취도: 0%</div>
     </div>
+    <div class="resizer-h" id="resizer-explorer"></div> <!-- 탐색기 리사이저 추가 -->
     <div class="main-content">
         <div class="description-panel" id="panel-desc">
             <h2 id="prob-title" style="margin: 0 0 20px 0; color: white;">문제를 선택하세요</h2>
@@ -177,6 +182,15 @@
     </div>
 </div>
 
+<!-- 학생 상세 리포트 팝업 -->
+<div id="report-view">
+    <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #444; padding-bottom:10px; margin-bottom:10px;">
+        <h4 id="report-user-name" style="margin:0; color:#28a745;">학생 리포트</h4>
+        <i class="fas fa-times" style="cursor:pointer;" onclick="document.getElementById('report-view').style.display='none'"></i>
+    </div>
+    <div id="report-content" style="flex:1; overflow-y:auto; font-size:13px; color:#ccc;"></div>
+</div>
+
 <script>
     const MASTER_CLOUD_URL = "https://script.google.com/macros/s/AKfycbxECzN-NGJWsrx466aoGcodQICqQY2UeNVBJ4_CR8gyxi2TerpznaZAX7xCLw530Yk1/exec";
     const GITHUB_USER = "kssim00", GITHUB_REPO = "python-test-V2", ADMIN_PW = "1234";
@@ -184,8 +198,8 @@
     let problems = [], solvedIds = [], currentIdx = -1, pyodide, editor, isDragging = false;
     let currentUser = "";
     let openMainCats = [], openSubCats = [], targetMode = "";
+    let allStatsData = []; // 리포트 조회를 위해 전체 통계 데이터 저장
 
-    // 앱 초기화 및 엔진 로드 (indexURL 추가로 에러 방지)
     async function initApp() {
         require.config({ paths: { 'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.36.1/min/vs' }});
         require(['vs/editor/editor.main'], async function() {
@@ -194,15 +208,11 @@
             });
             try {
                 pyodide = await loadPyodide({ indexURL: "https://cdn.jsdelivr.net/pyodide/v0.25.0/full/" });
-            } catch(e) {
-                console.error(e);
-                document.getElementById('loader-msg').innerText = "엔진 로드 실패 (새로고침 하세요)";
-            }
+            } catch(e) { console.error(e); }
             document.getElementById('loader').style.display='none';
         });
     }
 
-    // 깃허브 실시간 동기화
     async function refreshData() {
         const icon = document.getElementById('explorer-refresh-icon');
         if(icon) icon.classList.add('fa-spin');
@@ -237,22 +247,43 @@
         } catch(e) { console.error(e); }
     }
 
+    // 리사이징 기능 (탐색기 포함)
     function initResizing() {
-        const h = document.getElementById('resizer-h'), v = document.getElementById('resizer-v'), pD = document.getElementById('panel-desc'), pT = document.getElementById('panel-terminal');
-        h.onmousedown = (e) => { 
+        const hExp = document.getElementById('resizer-explorer'), 
+              hDesc = document.getElementById('resizer-h'), 
+              vTerm = document.getElementById('resizer-v'),
+              pExp = document.getElementById('panel-explorer'),
+              pDesc = document.getElementById('panel-desc'),
+              pTerm = document.getElementById('panel-terminal');
+
+        // 탐색기 너비 조절
+        hExp.onmousedown = (e) => {
+            isDragging = true;
+            const moveExp = (ev) => {
+                let w = ev.clientX - 50; // 사이드바 50px 제외
+                if (w > 100 && w < 600) { pExp.style.width = w + "px"; editor.layout(); }
+            };
+            const upExp = () => { isDragging = false; window.removeEventListener('mousemove', moveExp); };
+            window.addEventListener('mousemove', moveExp); window.addEventListener('mouseup', upExp);
+        };
+
+        // 지문 영역 너비 조절
+        hDesc.onmousedown = (e) => { 
             isDragging = true; 
-            const moveH = (e) => {
-                let w = e.clientX - 300; 
-                if (w > 150 && w < window.innerWidth-400) { pD.style.width = w+"px"; editor.layout(); }
+            const moveH = (ev) => {
+                let w = ev.clientX - pExp.offsetWidth - 58; 
+                if (w > 150 && w < window.innerWidth - 400) { pDesc.style.width = w + "px"; editor.layout(); }
             };
             const upH = () => { isDragging = false; window.removeEventListener('mousemove', moveH); };
             window.addEventListener('mousemove', moveH); window.addEventListener('mouseup', upH);
         };
-        v.onmousedown = (e) => { 
+
+        // 터미널 높이 조절
+        vTerm.onmousedown = (e) => { 
             isDragging = true; 
-            const moveV = (e) => {
-                let h = window.innerHeight - e.clientY;
-                if (h > 35 && h < window.innerHeight-150) { pT.style.height = h+"px"; editor.layout(); }
+            const moveV = (ev) => {
+                let h = window.innerHeight - ev.clientY;
+                if (h > 35 && h < window.innerHeight - 150) { pTerm.style.height = h + "px"; editor.layout(); }
             };
             const upV = () => { isDragging = false; window.removeEventListener('mousemove', moveV); };
             window.addEventListener('mousemove', moveV); window.addEventListener('mouseup', upV);
@@ -299,36 +330,23 @@
         editor.setValue(p.initial || "");
     }
 
-    // [기능] 파이썬 실행 및 폭죽 효과
     async function runCode() {
-        if(!pyodide) { alert("엔진 로딩 중입니다."); return; }
+        if(!pyodide) return;
         const p = problems.find(x => x.id === currentIdx);
         try {
             await pyodide.runPythonAsync(`import sys, io\nsys.stdout = io.StringIO()`);
             await pyodide.runPythonAsync(editor.getValue());
             const res = pyodide.runPython("sys.stdout.getvalue()").trim();
             document.getElementById('output').innerText = res;
-            
-            // 정답 비교
             if(res === p.expected.toString().trim()) {
                 document.getElementById('output').innerHTML += "\n\n<b style='color: yellow;'>🎉 정답입니다!</b>";
-                
-                // 폭죽 팡팡! (Confetti)
-                confetti({
-                    particleCount: 150,
-                    spread: 80,
-                    origin: { y: 0.6 },
-                    colors: ['#28a745', '#ffffff', '#007acc', '#ffcc00']
-                });
-
-                // 서버에 결과 저장
                 fetch(`${MASTER_CLOUD_URL}?action=save&name=${encodeURIComponent(currentUser)}&id=${p.id}`);
                 if(!solvedIds.includes(p.id)) { solvedIds.push(p.id); renderList(); }
+                confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 } });
             }
         } catch(e) { document.getElementById('output').innerText = "에러: " + e.message; }
     }
 
-    // [관리자] 기능
     function askPw(mode) { targetMode = mode; document.getElementById('pw-modal').style.display = 'flex'; document.getElementById('pw-input').focus(); }
     function checkPw() {
         const i = document.getElementById('pw-input');
@@ -336,20 +354,50 @@
             i.value = ""; closePanels(); 
             if(targetMode === 'dashboard') showStats();
             else { document.getElementById('admin-panel').style.display = 'block'; renderSortManager(); }
-        } else { i.value = ""; alert("비밀번호 불일치"); }
+        } else { i.value = ""; alert("비밀번호 오류"); }
     }
 
+    // 대시보드 통계 조회
     async function showStats() {
         document.getElementById('dashboard-panel').style.display = 'block';
         const body = document.getElementById('stats-body'); body.innerHTML = "조회 중...";
         const res = await fetch(`${MASTER_CLOUD_URL}?action=stats`);
-        const data = await res.json();
-        const stats = {}; data.forEach(row => { if(!stats[row[1]]) stats[row[1]] = new Set(); stats[row[1]].add(row[2]); });
+        allStatsData = await res.json();
+        const stats = {}; 
+        allStatsData.forEach(row => { 
+            if(!stats[row[1]]) stats[row[1]] = new Set(); 
+            stats[row[1]].add(row[2]); 
+        });
         body.innerHTML = "";
         Object.keys(stats).forEach(n => {
             const cnt = stats[n].size;
-            body.innerHTML += `<tr><td>${n}</td><td>${Math.floor((cnt/problems.length)*100)}%</td><td><i class="fas fa-file-invoice" style="cursor:pointer;" onclick="alert('${n} 리포트 생성')"></i></td></tr>`;
+            body.innerHTML += `<tr><td>${n}</td><td>${Math.floor((cnt/problems.length)*100)}%</td><td><i class="fas fa-file-invoice" style="cursor:pointer; color:#007acc;" onclick="openDetailReport('${n}')"></i></td></tr>`;
         });
+    }
+
+    // 상세 리포트 생성 및 표시
+    function openDetailReport(name) {
+        const reportModal = document.getElementById('report-view');
+        const reportContent = document.getElementById('report-content');
+        const reportUser = document.getElementById('report-user-name');
+        
+        reportUser.innerText = `[${name}] 학습 리포트`;
+        reportModal.style.display = 'flex';
+        
+        // 해당 학생이 푼 문제 ID 추출
+        const studentSolvedIds = allStatsData.filter(r => r[1] === name).map(r => parseInt(r[2]));
+        
+        let html = `<div style="margin-bottom:15px; background:#111; padding:10px; border-radius:5px;"><b>총 완료: ${studentSolvedIds.length} / ${problems.length}</b></div>`;
+        
+        problems.forEach(p => {
+            const isSolved = studentSolvedIds.includes(p.id);
+            html += `<div style="padding:5px 0; border-bottom:1px solid #333; display:flex; justify-content:space-between;">
+                        <span>${p.title}</span>
+                        <span style="color:${isSolved?'#28a745':'#555'}">${isSolved?'완료':'미완료'}</span>
+                     </div>`;
+        });
+        
+        reportContent.innerHTML = html;
     }
 
     function renderSortManager() {
@@ -392,7 +440,10 @@
     function resetDataAndSync() { if(confirm("초기화?")) { refreshData(); closePanels(); } }
     function applyTestJson() { try { const d = JSON.parse(document.getElementById('test-json-input').value); problems = [...d.map((p,i)=>({id:99000+i,...p})), ...problems]; renderList(); alert("적용됨"); closePanels(); } catch(e){alert("JSON 오류");} }
     function exportJson() { const data = JSON.stringify(problems.map(({id, ...rest})=>rest), null, 2); document.getElementById('test-json-input').value = data; alert("추출됨"); }
-    function closePanels() { document.querySelectorAll('.custom-modal, .floating-panel').forEach(p=>p.style.display='none'); }
+    function closePanels() { 
+        document.querySelectorAll('.custom-modal, .floating-panel').forEach(p=>p.style.display='none'); 
+        document.getElementById('report-view').style.display = 'none';
+    }
 
     function smartFormatDesc(text) {
         if (!text) return "";
