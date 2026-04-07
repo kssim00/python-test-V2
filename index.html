@@ -195,136 +195,48 @@
 
     const getSaveKey = (id) => `code_save_${currentUser}_${id}`;
 
-    async function initApp() {
-        require.config({ paths: { 'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.36.1/min/vs' }});
-        require(['vs/editor/editor.main'], async function() {
-            editor = monaco.editor.create(document.getElementById('editor-container'), { 
-                value: "", language: 'python', theme: 'vs-dark', fontSize: currentFontSize, automaticLayout: true, minimap: { enabled: false }
-            });
-            editor.onDidChangeModelContent(() => { if(currentIdx !== -1) localStorage.setItem(getSaveKey(currentIdx), editor.getValue()); });
-            editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, runCode);
-            try { 
-                pyodide = await loadPyodide({ indexURL: "https://cdn.jsdelivr.net/pyodide/v0.25.0/full/" }); 
-                pyodide.runPython(`import sys\nfrom js import window\ndef custom_input(p=""): return window.prompt(p)\n__builtins__.input = custom_input`);
-            } catch(e){}
-            document.getElementById('loader').style.display='none';
-        });
-    }
-
-    function changeFontSize(delta) {
-        currentFontSize += delta;
-        if(currentFontSize < 10) currentFontSize = 10;
-        if(currentFontSize > 40) currentFontSize = 40;
-        editor.updateOptions({ fontSize: currentFontSize });
-    }
-
-    function resetCurrentCode() {
-        if(currentIdx === -1) return;
+async function runCode() {
+        if(!pyodide) return;
         const p = problems.find(x => x.id === currentIdx);
-        if(!p) return;
-        if(confirm("작성한 코드를 모두 지우고 처음 상태로 되돌리시겠습니까?")) {
-            localStorage.removeItem(getSaveKey(currentIdx));
-            editor.setValue(p.initial || "");
-            document.getElementById('output').innerText = "코드가 초기화되었습니다.";
-        }
-    }
-
-    function resetCategoryCode(mainCat, subCat) {
-        if(!confirm(`[${mainCat} > ${subCat}] 카테고리의 모든 저장된 코드를 삭제하시겠습니까?\n(정답 기록은 유지되며 작성한 코드만 초기화됩니다.)`)) return;
-        
-        let count = 0;
-        problems.forEach(p => {
-            if(p.mainCat === mainCat && p.subCat === subCat) {
-                localStorage.removeItem(getSaveKey(p.id));
-                count++;
-            }
-        });
-
-        const curProb = problems.find(x => x.id === currentIdx);
-        if(curProb && curProb.mainCat === mainCat && curProb.subCat === subCat) {
-            editor.setValue(curProb.initial || "");
-        }
-        
-        alert(`[${mainCat} > ${subCat}] 내 ${count}개 문제가 초기화되었습니다.`);
-    }
-
-    async function refreshData() {
         try {
-            const sheetRes = await fetch(`${MASTER_CLOUD_URL}?action=getProblems`);
-            const sheetProbs = await sheetRes.json();
-            const filesRes = await fetch(`https://api.github.com/repos/${GITHUB_USER}/${GITHUB_REPO}/contents/`);
-            const files = await filesRes.json();
-            const jsonUrls = files.filter(f => f.name.endsWith('.json')).map(f => f.download_url);
-            let githubProbs = [];
-            for(let url of jsonUrls) { githubProbs = [...githubProbs, ...(await (await fetch(url)).json())]; }
-            problems = [...sheetProbs, ...githubProbs].map((p, i) => ({ id: 80000 + i, ...p }));
-            const sRes = await fetch(`${MASTER_CLOUD_URL}?action=getSolved&name=${encodeURIComponent(currentUser)}`);
-            solvedIds = (await sRes.json()).map(id => parseInt(id));
-            renderList();
-        } catch(e){}
-    }
+            // 1. Python 표준 출력을 가로채기 위한 설정
+            await pyodide.runPythonAsync(`import sys, io\nsys.stdout = io.StringIO()`);
+            
+            // 2. 에디터에 작성된 코드 실행
+            await pyodide.runPythonAsync(editor.getValue());
+            
+            // 3. 실행 결과 가져오기
+            const rawOutput = pyodide.runPython("sys.stdout.getvalue()");
+            document.getElementById('output').innerText = rawOutput;
 
-    async function login() {
-        const n = document.getElementById('user-name').value.trim();
-        if(!n) return;
-        currentUser = n;
-        document.getElementById('login-screen').style.display='none';
-        document.getElementById('loader').style.display='flex';
-        await refreshData();
-        document.getElementById('loader').style.display = 'none'; 
-        document.getElementById('main-app').style.display = 'flex';
-        document.getElementById('user-display').innerText = currentUser;
-        if(problems.length > 0) loadProblem(problems[0].id);
-        initResizing();
-    }
+            // 4. 정답 비교 로직 (개선됨)
+            // JSON에 적힌 정답 숫자 (예: "13")
+            const expectedValue = p.expected.toString().trim();
+            
+            // 출력된 전체 텍스트에서 숫자만 추출 (예: "반환 값은 13 입니다" -> ["13"])
+            const numbersInOutput = rawOutput.match(/-?\d+/g); 
+            
+            // 출력된 숫자들 중에 정답 숫자가 포함되어 있는지 확인
+            const isCorrect = numbersInOutput && numbersInOutput.includes(expectedValue);
 
-    function initResizing() {
-        const hExp = document.getElementById('resizer-explorer'), hDesc = document.getElementById('resizer-h'), vTerm = document.getElementById('resizer-v');
-        const pExp = document.getElementById('panel-explorer'), pDesc = document.getElementById('panel-desc'), pTerm = document.getElementById('panel-terminal');
-        const zoomArea = document.getElementById('zoom-area');
-
-        hExp.onmousedown = (e) => { isDragging = true; const move = (ev) => { let w = ev.clientX - 50; if (w > 80 && w < 500) { pExp.style.width = w + "px"; editor.layout(); } }; const up = () => { isDragging = false; window.removeEventListener('mousemove', move); }; window.addEventListener('mousemove', move); window.addEventListener('mouseup', up); };
-        hDesc.onmousedown = (e) => { isDragging = true; const move = (ev) => { let w = ev.clientX - pExp.offsetWidth - 58; if (w > 150 && w < window.innerWidth - 400) { pDesc.style.width = w + "px"; editor.layout(); } }; const up = () => { isDragging = false; window.removeEventListener('mousemove', move); }; window.addEventListener('mousemove', move); window.addEventListener('mouseup', up); };
-        vTerm.onmousedown = (e) => { isDragging = true; const move = (ev) => { 
-            let h = window.innerHeight - ev.clientY; 
-            if (h > 35 && h < window.innerHeight - 150) { 
-                pTerm.style.height = h + "px"; 
-                zoomArea.style.bottom = (h + 15) + "px"; 
-                editor.layout(); 
-            } 
-        }; const up = () => { isDragging = false; window.removeEventListener('mousemove', move); }; window.addEventListener('mousemove', move); window.addEventListener('mouseup', up); };
-    }
-
-    function renderList() {
-        const root = document.getElementById('accordion-root'); root.innerHTML = "";
-        const searchTerm = document.getElementById('prob-search').value.toLowerCase();
-        const tree = {};
-        problems.forEach(p => { 
-            if(searchTerm && !p.title.toLowerCase().includes(searchTerm)) return;
-            if(!tree[p.mainCat]) tree[p.mainCat] = {}; if(!tree[p.mainCat][p.subCat]) tree[p.mainCat][p.subCat] = []; 
-            tree[p.mainCat][p.subCat].push(p); 
-        });
-        for(const m in tree) {
-            let mDiv = document.createElement('div'); mDiv.className=`main-cat-header`; mDiv.innerText=m;
-            mDiv.onclick=()=>{ openMainCats.includes(m)?openMainCats=openMainCats.filter(x=>x!=m):openMainCats.push(m); renderList(); };
-            root.appendChild(mDiv);
-            if(openMainCats.includes(m) || searchTerm) {
-                for(const s in tree[m]) {
-                    let sDiv = document.createElement('div'); sDiv.className=`sub-cat-header`; sDiv.innerText=s;
-                    sDiv.onclick=()=>{ openSubCats.includes(s)?openSubCats=openSubCats.filter(x=>x!=s):openSubCats.push(s); renderList(); };
-                    root.appendChild(sDiv);
-                    if(openSubCats.includes(s) || searchTerm) {
-                        tree[m][s].forEach(p => {
-                            let pDiv = document.createElement('div'); 
-                            pDiv.className=`prob-item ${currentIdx==p.id?'active':''} ${solvedIds.includes(p.id)?'solved':''}`;
-                            pDiv.innerText = (solvedIds.includes(p.id)?'✔ ':'') + p.title; 
-                            pDiv.onclick=()=>loadProblem(p.id); root.appendChild(pDiv);
-                        });
-                    }
+            if(isCorrect) {
+                document.getElementById('output').innerHTML += "\n\n<b style='color: yellow;'>🎉 정답입니다!</b>";
+                // 서버에 정답 기록 저장
+                fetch(`${MASTER_CLOUD_URL}?action=save&name=${encodeURIComponent(currentUser)}&id=${p.id}`);
+                
+                if(!solvedIds.includes(p.id)) { 
+                    solvedIds.push(p.id); 
+                    renderList(); 
                 }
+                // 축하 효과
+                confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 } });
+            } else {
+                document.getElementById('output').innerHTML += "\n\n<b style='color: #ff4d4d;'>❌ 오답입니다. 다시 시도해보세요!</b>";
             }
+        } catch(e) { 
+            // 문법 에러 등이 발생한 경우 출력
+            document.getElementById('output').innerText = "에러가 발생했습니다:\n" + e.message; 
         }
-        document.getElementById('progress-stats').innerText = `성취도: ${problems.length?Math.floor((solvedIds.length/problems.length)*100):0}% (${solvedIds.length}/${problems.length})`;
     }
 
     function loadProblem(id) {
