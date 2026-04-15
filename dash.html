@@ -476,6 +476,22 @@ function importExcel(file){
       const ws=wb.Sheets[wb.SheetNames[0]];
       const rows=XLSXr.utils.sheet_to_json(ws,{header:1,defval:null,raw:false});
 
+      // ── 출석설정 시트에서 manualAttend 복원
+      const attendMap={}; // {학생ID: {월키: [슬롯...]}}
+      const wsAttend=wb.Sheets['출석설정'];
+      if(wsAttend){
+        const aRows=XLSXr.utils.sheet_to_json(wsAttend,{header:1,defval:null,raw:false});
+        for(let r=1;r<aRows.length;r++){
+          const ar=aRows[r];
+          const sid=(ar[0]||'').toString().trim();
+          const mKey=(ar[1]||'').toString().trim();
+          if(!sid||!mKey)continue;
+          const slots=ar.slice(2,6).map(v=>v?v.toString().trim():'empty');
+          if(!attendMap[sid])attendMap[sid]={};
+          attendMap[sid][mKey]=slots;
+        }
+      }
+
       // 헤더행에서 컬럼→월 매핑 생성
       const colMonth={};
       const hdrRow=rows[0]||[];
@@ -524,6 +540,13 @@ function importExcel(file){
         const ex=db.students.find(s=>s.id===sid);
         const baseObj=ex||{id:sid,name,day,time,timeCode:tc,lessons,paused:false};
         baseObj.lessons=lessons;
+        // 출석설정 시트에 해당 학생 데이터가 있으면 복원, 없으면 기존 manualAttend 유지
+        if(attendMap[sid]){
+          baseObj.manualAttend=attendMap[sid];
+        } else if(!ex){
+          // 신규 학생이고 출석설정 시트도 없으면 초기화
+          baseObj.manualAttend=undefined;
+        }
         newStudents.push(baseObj);
       }
       db.students=newStudents;
@@ -547,7 +570,7 @@ function exportExcel(){
   });
 
   const MONTHS=['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
-  const SLOTS=4; // 월별 수업 슬롯 수
+  const SLOTS=6; // 월별 수업 슬롯 수 (5~6주 달, 보충 포함 처리)
   const DATA_START=3; // D열(index 3)부터 수업 데이터
 
   // ── 1행: 헤더 (A,B,C 비워두고 4열씩 월 이름)
@@ -562,14 +585,9 @@ function exportExcel(){
       .filter(l=>l.date&&/^\d+\//.test(l.date))
       .map(l=>{const[mo,dd]=l.date.split('/').map(Number);return{...l,_m:mo,_d:dd||0};})
       .sort((a,b)=>a._m!==b._m?a._m-b._m:a._d-b._d);
-    // billing month 기반 그룹 (출석 계산과 동일한 방식 → 수업 누락 없음)
+    // 달력 월별 그룹 (SLOTS=6으로 5~6주 달, 보충수업 포함 처리)
     const byM={};
-    for(let i=0;i<lessons.length;i+=SLOTS){
-      const slice=lessons.slice(i,i+SLOTS);
-      const billingM=slice[0]._m;
-      if(!byM[billingM])byM[billingM]=[];
-      byM[billingM].push(...slice);
-    }
+    lessons.forEach(l=>{if(!byM[l._m])byM[l._m]=[];if(byM[l._m].length<SLOTS)byM[l._m].push(l);});
 
     const row=new Array(DATA_START+SLOTS*12).fill(null);
     row[0]=idx+1;
@@ -635,7 +653,8 @@ function exportExcel(){
           ws[addr].s=S_INFO;
         } else {
           const val=wsData[r][c];
-          if(val==='결'){
+          const isAbsentCell=val==='결'||(typeof val==='string'&&val.includes('\n결'));
+          if(isAbsentCell){
             ws[addr].s=isFirstOfMonth?S_ABSENT_FIRST:S_ABSENT;
           } else if(val){
             ws[addr].s=isFirstOfMonth?S_LESSON_FIRST:S_LESSON;
@@ -647,9 +666,26 @@ function exportExcel(){
     }
   }
 
-  XLSX.utils.book_append_sheet(wb=XLSX.utils.book_new(),ws,'2026년');
+  const wb2=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb2,ws,'2026년');
+
+  // ── 출석설정 시트: manualAttend 데이터 보존 (수동 출석 설정 내보내기)
+  const attendRows=[['학생ID','월키','슬롯1','슬롯2','슬롯3','슬롯4']];
+  sorted.forEach(s=>{
+    if(!s.manualAttend)return;
+    Object.entries(s.manualAttend).forEach(([mKey,slots])=>{
+      if(slots&&slots.some&&slots.some(v=>v!=='empty')){
+        attendRows.push([s.id,mKey,...slots]);
+      }
+    });
+  });
+  if(attendRows.length>1){
+    const wsAttend=XLSX.utils.aoa_to_sheet(attendRows);
+    XLSX.utils.book_append_sheet(wb2,wsAttend,'출석설정');
+  }
+
   const d=new Date();
-  XLSX.writeFile(wb,`진도현황_${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}.xlsx`);
+  XLSX.writeFile(wb2,`진도현황_${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}.xlsx`);
   toast('💾 엑셀로 내보냈습니다!');
 }
 
