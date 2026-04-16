@@ -506,7 +506,7 @@ function importExcel(file){
       const newStudents=[];
       for(let r=1;r<rows.length;r++){
         const row=rows[r];
-        const name=(row[2]||'').toString().trim();
+        const name=(row[2]||'').toString().replace(/[\r\n\t]+/g,' ').trim();
         if(!name)continue;
         const tc=(row[1]||'').toString().trim();
         const [day,time]=tc.split('-');
@@ -1408,8 +1408,25 @@ function migrateTimesTo50(){
   return changed;
 }
 
+/* ── 이름/ID 내 줄바꿈 문자 자동 정리 (엑셀 셀 줄바꿈 대응) ── */
+function migrateStudentNames(){
+  let changed=false;
+  db.students.forEach(s=>{
+    const cleanName=(s.name||'').replace(/[\r\n\t]+/g,' ').trim();
+    if(cleanName!==s.name){
+      const cleanId=(s.id||'').replace(/[\r\n\t]+/g,' ').trim();
+      s.name=cleanName;
+      s.id=cleanId;
+      if(s.timeCode)s.timeCode=(s.timeCode||'').replace(/[\r\n\t]+/g,'').trim();
+      changed=true;
+    }
+  });
+  if(changed)saveDB();
+}
+
 /* ── 초기 실행 ── */
 if(loadDB()&&db.students.length>0){
+  migrateStudentNames();  // 이름 줄바꿈 자동 정리 (1회성)
   migrateAbsentDates();  // 기존 날짜 없는 결석 자동 보정 (1회성)
   migrateTimesTo50();    // 정수 시간 → X:50 형식 변환 (1회성)
   if(db.importedAt){const _id=new Date(db.importedAt);const _is=`${_id.getMonth()+1}/${_id.getDate()} ${String(_id.getHours()).padStart(2,'0')}:${String(_id.getMinutes()).padStart(2,'0')}`;document.getElementById('headerSub').textContent=`불러옴 ${_is}`;}else{document.getElementById('headerSub').textContent='데이터 로드됨';}
