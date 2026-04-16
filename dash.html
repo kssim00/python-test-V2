@@ -492,14 +492,15 @@ function importExcel(file){
         }
       }
 
-      // 헤더행에서 컬럼→월 매핑 생성
+      // 헤더행에서 컬럼→월 매핑 및 월 시작 컬럼 계산
       const colMonth={};
+      const monthStarts={}; // {월번호: 시작컬럼인덱스}
       const hdrRow=rows[0]||[];
       let curM=null;
       for(let c=0;c<hdrRow.length;c++){
         const h=(hdrRow[c]||'').toString().trim();
         const mm=h.match(/^(\d+)월/);
-        if(mm)curM=parseInt(mm[1]);
+        if(mm){curM=parseInt(mm[1]);monthStarts[curM]=c;}
         if(curM!=null)colMonth[c]=curM;
       }
       const newStudents=[];
@@ -519,32 +520,55 @@ function importExcel(file){
           // 결석 판별: "결" 단독 또는 "날짜\n결" 형식 모두 인식
           const isAbsent=val==='결'||lines.includes('결');
           if(isAbsent){
-            // 결석: 날짜가 있으면 날짜 사용, 없으면 월/0 으로 복원
+            // 결석: 날짜가 있으면 날짜 사용, 없으면 컬럼의 월/0 으로 복원
             const absM=colMonth[c]??null;
             const absDate=firstDateM?firstDateM[1]:(absM!=null?`${absM}/0`:'');
             lessons.push({absent:true,date:absDate,content:'결석',id:uid()});
           } else {
             // ── 날짜 파싱: 첫 줄에서 M/D만 추출, 나머지는 콘텐츠
-            // 분할 수업("2/3 1시간\n2/12 30분") 포함 올바르게 처리
             const date=firstDateM?firstDateM[1]:'';
-            // 첫 줄에서 날짜 뒤 텍스트 + 나머지 줄 → content
             const firstExtra=firstDateM?lines[0].slice(firstDateM[0].length).trim():'';
             const contentParts=[firstExtra,...lines.slice(1)].filter(Boolean);
             const content=contentParts.join('\n');
-            // 분할 수업 여부: 콘텐츠 중 날짜 패턴이 또 있으면 isSplit 표시
             const isSplit=contentParts.some(l=>/^\d+\/\d+/.test(l));
             lessons.push({absent:false,date,content,isSplit,id:uid()});
           }
         }
+
+        // ── 컬럼 위치 기준으로 manualAttend 자동 생성
+        // (3/31이 4월 컬럼에 있으면 → 4월 출석으로 인식)
+        const yr=new Date().getFullYear();
+        const manualAttendFromCols={};
+        for(let mi=1;mi<=12;mi++){
+          const startC=monthStarts[mi];
+          if(startC==null)continue;
+          // 다음 월 시작 전까지가 이 월의 컬럼 범위
+          let endC=row.length;
+          for(let m2=mi+1;m2<=12;m2++){if(monthStarts[m2]!=null){endC=monthStarts[m2];break;}}
+          const slots=[];
+          for(let c=startC;c<endC&&slots.length<4;c++){
+            const cellVal=(row[c]||'').toString().trim();
+            if(!cellVal){slots.push('empty');}
+            else{
+              const cLines=cellVal.split('\n').map(l=>l.trim()).filter(Boolean);
+              slots.push((cellVal==='결'||cLines.includes('결'))?'absent':'done');
+            }
+          }
+          while(slots.length<4)slots.push('empty');
+          if(slots.some(s=>s!=='empty'))manualAttendFromCols[`${yr}-${mi}`]=slots;
+        }
+
         const sid=`${tc}_${name}`;
         const ex=db.students.find(s=>s.id===sid);
         const baseObj=ex||{id:sid,name,day,time,timeCode:tc,lessons,paused:false};
         baseObj.lessons=lessons;
-        // 출석설정 시트에 해당 학생 데이터가 있으면 복원, 없으면 기존 manualAttend 유지
+        // 출석설정 시트 > 컬럼 위치 기준 자동 생성 순으로 적용
         if(attendMap[sid]){
           baseObj.manualAttend=attendMap[sid];
+        } else if(Object.keys(manualAttendFromCols).length>0){
+          baseObj.manualAttend=manualAttendFromCols;
         } else if(!ex){
-          // 신규 학생이고 출석설정 시트도 없으면 초기화
+          // 신규 학생이고 데이터 없으면 초기화
           baseObj.manualAttend=undefined;
         }
         newStudents.push(baseObj);
@@ -570,46 +594,59 @@ function exportExcel(){
   });
 
   const MONTHS=['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
-  const SLOTS=6; // 월별 수업 슬롯 수 (5~6주 달, 보충 포함 처리)
+  const SLOTS=MONTH_CLASSES; // 슬롯=4 (항상 4개씩 묶음, 날짜 무관)
   const DATA_START=3; // D열(index 3)부터 수업 데이터
 
-  // ── 1행: 헤더 (A,B,C 비워두고 4열씩 월 이름)
+  // ── 1행: 헤더 (1월~12월 고정)
   const hdrRow=new Array(DATA_START+SLOTS*12).fill(null);
   MONTHS.forEach((m,i)=>{ hdrRow[DATA_START+i*SLOTS]=m; });
 
   // ── 데이터 행 구성
+  // 4개씩 묶되, 그룹의 시작 위치는 첫 수업의 실제 월에 맞춤
+  // → 4월 입회 학생은 1~3월 빈칸, 4월 첫 칸부터 기입
   const wsData=[hdrRow];
+
   sorted.forEach((s,idx)=>{
-    // 날짜 있는 수업만 정렬
-    const lessons=s.lessons
+    const withDate=s.lessons
       .filter(l=>l.date&&/^\d+\//.test(l.date))
       .map(l=>{const[mo,dd]=l.date.split('/').map(Number);return{...l,_m:mo,_d:dd||0};})
       .sort((a,b)=>a._m!==b._m?a._m-b._m:a._d-b._d);
-    // 달력 월별 그룹 (SLOTS=6으로 5~6주 달, 보충수업 포함 처리)
-    const byM={};
-    lessons.forEach(l=>{if(!byM[l._m])byM[l._m]=[];if(byM[l._m].length<SLOTS)byM[l._m].push(l);});
+    const noDate=s.lessons.filter(l=>!(l.date&&/^\d+\//.test(l.date)));
+    const all=[...withDate,...noDate];
+
+    // 4개씩 묶기
+    const groups=[];
+    for(let i=0;i<all.length;i+=SLOTS)groups.push(all.slice(i,i+SLOTS));
 
     const row=new Array(DATA_START+SLOTS*12).fill(null);
     row[0]=idx+1;
     row[1]=s.timeCode||'';
     row[2]=s.name;
-    for(let mi=1;mi<=12;mi++){
-      const base=DATA_START+(mi-1)*SLOTS;
-      (byM[mi]||[]).forEach((l,si)=>{
+
+    let lastPos=-1;
+    groups.forEach((g)=>{
+      // 그룹의 첫 날짜 수업으로 컬럼 위치(월) 결정
+      const firstWithDate=g.find(l=>l._m);
+      const groupMonth=firstWithDate?firstWithDate._m:(lastPos>=0?lastPos+2:1);
+      // 실제 월 위치 vs 이전 그룹 다음 위치 중 큰 것 선택 → 빈칸 유지, 겹침 방지
+      const pos=Math.max(lastPos+1, groupMonth-1); // 0-indexed (0=1월, 3=4월)
+      if(pos>=12)return;
+      lastPos=pos;
+      const base=DATA_START+pos*SLOTS;
+      g.forEach((l,si)=>{
         let cellVal;
         if(l.absent){
-          // 결석 날짜 보존: 불러오기 시 정확한 날짜 복원을 위해 날짜 포함
-          cellVal=(l.date?l.date+'\n':'')+'결';
+          const realDate=l.date&&!/\/0$/.test(l.date);
+          cellVal=(realDate?l.date+'\n':'')+'결';
         } else if(l.isSplit&&l.content){
-          // 분할 수업: 첫 줄 콘텐츠를 날짜와 같은 줄에
           const parts=l.content.split('\n');
           cellVal=l.date+(parts[0]?' '+parts[0]:'')+(parts.slice(1).length?'\n'+parts.slice(1).join('\n'):'');
         } else {
-          cellVal=l.date+'\n'+(l.content||'');
+          cellVal=(l.date||'')+'\n'+(l.content||'');
         }
         row[base+si]=cellVal;
       });
-    }
+    });
     wsData.push(row);
   });
 
