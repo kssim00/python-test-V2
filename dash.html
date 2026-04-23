@@ -935,6 +935,7 @@ function makeCard(s){
       <div class="card-actions">
         <span class="ic-btn" onclick="togglePause('${s.id}')">${s.paused?'▶ 복귀':'⏸ 휴식'}</span>
         <span class="ic-btn" onclick="toggleBox('${eid}',this)">✏️ 변경</span>
+        <span class="ic-btn" onclick="toggleMemo('memo_${sk}')" title="메모" style="${s.memo?'color:#f59e0b;border-color:#fde68a;background:#fffde7':''}">📝</span>
         ${s.paused?'<span class="paused-badge">휴식중</span>':warn?'<span class="warn-badge">⚠️ 결석</span>':''}
       </div>
     </div>
@@ -994,6 +995,14 @@ function makeCard(s){
       </div>
     </div>
 
+    <div id="memo_${sk}" style="display:none;margin-top:7px;background:#fffde7;border:1.5px solid #fde68a;border-radius:7px;padding:9px">
+      <textarea id="memo_ta_${sk}" style="width:100%;border:none;background:transparent;font-size:12px;font-family:inherit;resize:vertical;min-height:52px;outline:none;color:#1e293b" placeholder="스크래치/엔트리 아이디, 특이사항 등...">${s.memo||''}</textarea>
+      <div style="display:flex;justify-content:flex-end;gap:5px;margin-top:4px">
+        <button style="padding:3px 10px;border-radius:5px;border:none;background:#f59e0b;color:#fff;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit" onclick="saveMemo('${s.id}','${sk}')">저장</button>
+        <button style="padding:3px 10px;border-radius:5px;border:1.5px solid #d1d5db;background:#fff;font-size:11px;cursor:pointer;font-family:inherit" onclick="toggleMemo('memo_${sk}')">닫기</button>
+      </div>
+    </div>
+
     ${s.lessons.length?`
     <div class="hist-toggle" onclick="toggleHist('${hid}',this)">▶ 전체 기록 (${s.lessons.length}건)</div>
     <div class="hist-list" id="${hid}">${histHtml}</div>`:''}
@@ -1002,6 +1011,21 @@ function makeCard(s){
 }
 
 /* ── 동작 함수들 ── */
+function toggleMemo(mid){
+  const el=document.getElementById(mid);
+  if(!el)return;
+  el.style.display=el.style.display==='block'?'none':'block';
+  if(el.style.display==='block'){const ta=el.querySelector('textarea');if(ta)ta.focus();}
+}
+function saveMemo(sid,sk){
+  const s=db.students.find(s=>s.id===sid);if(!s)return;
+  const ta=document.getElementById('memo_ta_'+sk);
+  s.memo=(ta?ta.value.trim():'');
+  saveDB();
+  document.getElementById('memo_'+sk).style.display='none';
+  refreshCard(s);
+  toast('📝 메모 저장!');
+}
 function toggleBox(id,btn){
   const el=document.getElementById(id);const open=el.classList.toggle('open');
   if(btn){if(el.classList.contains('form-record'))btn.textContent=open?'✕ 닫기':'＋ 수업 기록하기';
