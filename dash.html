@@ -526,7 +526,15 @@ function getActiveMonth(student){
     let m = cur - back;
     if(m<=0) m += 12;
     const ma = monthlyAttendance(student, m);
-    if(ma.total===0) break; // 해당 달에 기록 자체가 없으면 더 이전은 볼 필요 없음
+    // [2026-07-28 수정] 기존 코드는 ma.total===0이면 무조건 탐색을 중단했음.
+    // 문제는 total===0이 두 가지 다른 상황을 모두 포함한다는 점:
+    //   1) 그 달에 기록 자체가 전혀 없음 → slots=[] (길이 0) → 더 볼 필요 없음, 중단이 맞음
+    //   2) 수동 리셋 등으로 슬롯 4칸은 존재하지만 전부 비어있음 → slots=['empty','empty','empty','empty']
+    //      (길이 4, total=0) → 이건 "채워야 할 빈 슬롯이 있는 달"이므로 후보로 잡아야 하는데
+    //      기존 코드는 여기서도 그냥 break 해버려서, 정작 채워야 할 6월을 건너뛰고
+    //      7월(현재 달)부터 채우는 버그가 발생했음.
+    // → slots.length===0(진짜 기록 없음)일 때만 중단하도록 조건을 분리해 수정.
+    if(ma.slots.length===0) break; // 해당 달에 기록 자체가 없으면 더 이전은 볼 필요 없음
     if(ma.slots.includes('empty')){
       candidate = m; // 빈 슬롯이 있는 가장 오래된 달까지 계속 갱신
     } else {
